@@ -64,6 +64,19 @@
       </label>
     </div>
 
+    <section class="spec-ctrl">
+      <h2 class="spec-ctrl-title">库存规格选型 <span class="compare-sub">从现有展签中挑能装下当前内容的规格</span></h2>
+      <label class="field">
+        <span class="field-label">现有展签规格（每行一种：宽×高 mm，宽 30～999、高 20～999，最多 12 种）</span>
+        <textarea id="specs" rows="4" placeholder="每行一种现有展签的宽×高（毫米），如：&#10;120×80&#10;150x100&#10;空行忽略、重复规格自动去重；非法行指出行号、不参与推荐。"></textarea>
+        <span class="field-hint" id="specHint">未录入规格</span>
+      </label>
+      <div class="actions">
+        <button id="specRunBtn" type="button" disabled>选型（按当前成品与设置）</button>
+      </div>
+      <div id="specResults" class="spec-results" hidden></div>
+    </section>
+
     <section id="compare" class="compare" hidden>
       <h2 class="compare-title">修订对照 <span class="compare-sub">差异标记仅用于对照，不进入打印</span></h2>
       <div id="diffView" class="diff-view"></div>
@@ -138,6 +151,13 @@
           同代价时固定优先保留原文较早字符；对照区中绿色为新增、红色删除线为已删。</li>
         <li>原稿与修订稿沿用当前尺寸与英文译文<strong>分别排版</strong>，对照表展示两版字号、中文行数与能否容纳的变化；
           选定成品版本后，预览与打印只显示该版，差异标记不进入打印；所选版排不下时禁用打印并说明超宽或超高。</li>
+        <li><strong>库存规格选型</strong>：逐行录入最多 12 种现有展签宽×高（毫米，宽 30～999、高 20～999；
+          空行忽略、重复规格自动去重、非法行指出行号且不参与推荐）。点击「选型」后，
+          按当前选定的成品版本（原稿/修订稿）与中英、段落对齐、专名保护、二维码设置，
+          对每种规格求 12–24px 中的最大可用字号，按面积从小到大（同面积按录入顺序）
+          推荐能完整容纳的规格，并列出其余规格的失败原因；没有可用规格时明确提示、当前尺寸不变。
+          点击规格行的「采用」才把该规格回填到宽高输入框，并刷新预览、单张与拼版打印；
+          修改内容或设置后上次选型结果自动失效，需重新选型。</li>
         <li>打印输出与预览<strong>同换行、同物理尺寸</strong>（毫米）。</li>
         <li><strong>同款拼版打印</strong>：设置份数（1～100）与 A4 纵向/横向后，仅当所选成品通过排版校验，
           才把同一成品按原毫米尺寸复制到纸内（不缩放）：纸张每边留白 10mm、展签间隔 4mm，
