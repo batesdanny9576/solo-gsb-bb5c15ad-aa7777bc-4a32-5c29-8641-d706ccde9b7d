@@ -64,6 +64,19 @@
       </label>
     </div>
 
+    <section class="stock-pick">
+      <h2 class="stock-pick-title">库存规格选型 <span class="compare-sub">从现有展签规格中挑选能容纳当前成品的尺寸</span></h2>
+      <label class="field">
+        <span class="field-label">现有展签规格（每行「宽×高」毫米：宽 30～999、高 20～999，最多 12 种）</span>
+        <textarea id="stockSizes" rows="5" placeholder="如：&#10;120×80&#10;100×60&#10;90×50&#10;空行忽略、重复规格自动去重；非法行指出行号且不参与推荐。"></textarea>
+        <span class="field-hint" id="stockHint">未录入库存规格</span>
+      </label>
+      <div class="actions">
+        <button id="stockPickBtn" type="button">选型：推荐可容纳的库存规格</button>
+      </div>
+      <div id="stockResult" class="stock-result" hidden></div>
+    </section>
+
     <section id="compare" class="compare" hidden>
       <h2 class="compare-title">修订对照 <span class="compare-sub">差异标记仅用于对照，不进入打印</span></h2>
       <div id="diffView" class="diff-view"></div>
@@ -144,6 +157,13 @@
           按行列容量从左到右、从上到下逐页填充；右侧「同款拼版预览」分页展示每页每张位置，
           「拼版打印」只输出拼版页（不含编辑面板与单张预览）；任一方向连一张都放不下时，
           提示展签尺寸与纸内可用尺寸并禁用拼版打印；各份换行与二维码码图与单张预览完全一致。</li>
+        <li><strong>库存规格选型</strong>：逐行录入现有展签规格「宽×高」（毫米，宽 30～999、高 20～999，最多 12 种）；
+          空行忽略、重复规格自动去重，非法行指出行号且不参与推荐。点击「选型」后，
+          以当前选定的成品版本（原稿或修订稿）与中英、段落对齐、专名保护、二维码设置，
+          对每种规格按现有排版规则求最大可用字号；能完整容纳的规格按面积从小到大
+          （同面积按录入顺序）列在前面并给出可用字号，其余规格注明失败原因；
+          没有可用规格时明确提示且不改当前尺寸。点击某行的「采用」才把该规格回填
+          宽/高并刷新预览、单张与拼版打印。</li>
       </ul>
     </details>
   </aside>

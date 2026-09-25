@@ -22,6 +22,7 @@
   var SHEET_GAP_MM = 4;           // 拼版：相邻展签间隔
   var A4_W_MM = 210, A4_H_MM = 297; // A4 短边/长边
   var COPIES_MIN = 1, COPIES_MAX = 100; // 拼版份数范围
+  var STOCK_MAX = 12;           // 库存规格选型：最多录入的规格种数（宽 30～999、高 20～999，同标签尺寸范围）
 
   var el = {
     title: document.getElementById('title'),
@@ -37,6 +38,10 @@
     protectHint: document.getElementById('protectHint'),
     widthMm: document.getElementById('widthMm'),
     heightMm: document.getElementById('heightMm'),
+    stockSizes: document.getElementById('stockSizes'),
+    stockHint: document.getElementById('stockHint'),
+    stockPickBtn: document.getElementById('stockPickBtn'),
+    stockResult: document.getElementById('stockResult'),
     printBtn: document.getElementById('printBtn'),
     status: document.getElementById('status'),
     stage: document.getElementById('stage'),
@@ -758,7 +763,11 @@
     el.fitDelta.textContent = delta;
   }
 
-  function render() {
+  // ---------- 输入收集 ----------
+  // 收集当前面板输入并构造排版输入（原稿与修订稿两版），主渲染与库存规格选型共用。
+  // 返回 { input, revInput, revTrim, revActive, qr, qrError, qrParsed, protect }；
+  // qrError / protect.error 为阻塞性错误，调用方据此中断后续排版。
+  function collectInputs() {
     var input = {
       title: el.title.value,
       body: el.body.value,
@@ -772,6 +781,57 @@
     input.dual = input.enTrim.length > 0;
     input.paired = input.dual && el.paraAlign.checked;
 
+    // 展品介绍链接 → 底部二维码；非法或无法编码时报错，空链接不预留底部区域
+    var qrParsed = parseQrLink(el.qrLink.value);
+    var qrError = qrParsed && qrParsed.error ? qrParsed.error : null;
+    var qr = null;
+    if (!qrError && qrParsed) {
+      var qrEnc = window.LabelQR.encode(qrParsed.text);
+      if (qrEnc.error) {
+        qrError = '链接无法编码为二维码：数据超出 QR 版本 ' +
+          window.LabelQR.MAX_VERSION + '（纠错 M）约 ' + qrEnc.maxBytes +
+          ' 字节的容量上限。';
+      } else {
+        qr = qrEnc;
+      }
+    }
+    input.reserveBottomMm = qr ? QR_BAND_MM : 0;
+
+    // 中文专名保护表：原稿与修订稿应用同一张表
+    var protect = parseProtectedWords(el.protect.value);
+    if (!protect.error) input.protectedWords = protect.words;
+
+    // 修订稿非空白即进入对照模式；修订稿沿用当前尺寸与英文译文
+    var revTrim = el.bodyRev.value.trim();
+    var revActive = revTrim.length > 0;
+    var revInput = null;
+    if (revActive) {
+      revInput = {
+        title: input.title,
+        body: el.bodyRev.value,
+        bodyEn: input.bodyEn,
+        widthMm: input.widthMm,
+        heightMm: input.heightMm,
+        protectedWords: input.protectedWords,
+        reserveBottomMm: input.reserveBottomMm,
+        paired: input.paired
+      };
+      revInput.titleTrim = input.titleTrim;
+      revInput.bodyTrim = revTrim;
+      revInput.enTrim = input.enTrim;
+      revInput.dual = input.dual;
+    }
+
+    return {
+      input: input, revInput: revInput, revTrim: revTrim, revActive: revActive,
+      qr: qr, qrError: qrError, qrParsed: qrParsed, protect: protect
+    };
+  }
+
+  function render() {
+    var c = collectInputs();
+    var input = c.input;
+
     // 段落对齐开关仅在中英双栏时可用；单栏时恢复现有独立布局
     el.paraAlign.disabled = !input.dual;
     el.paraAlignHint.textContent = !input.dual
@@ -780,50 +840,34 @@
           ? '已开启：中英段落一一配对、同高起始'
           : '已关闭：两栏按各自内容独立排版');
 
-    // 展品介绍链接 → 底部二维码；非法或无法编码时报错并禁用打印，空链接恢复原版式
     setDualMode(input.paired ? 'paired' : (input.dual ? 'dual' : 'single'));
-    var qrParsed = parseQrLink(el.qrLink.value);
-    var qrError = qrParsed && qrParsed.error ? qrParsed.error : null;
-    currentQr = null;
-    if (!qrError && qrParsed) {
-      var qrEnc = window.LabelQR.encode(qrParsed.text);
-      if (qrEnc.error) {
-        qrError = '链接无法编码为二维码：数据超出 QR 版本 ' +
-          window.LabelQR.MAX_VERSION + '（纠错 M）约 ' + qrEnc.maxBytes +
-          ' 字节的容量上限。';
-      } else {
-        currentQr = qrEnc;
-      }
-    }
-    input.reserveBottomMm = currentQr ? QR_BAND_MM : 0;
-    el.qrHint.classList.toggle('err', !!qrError);
-    if (qrError) {
-      el.qrHint.textContent = qrError;
-      setStatus(qrError, 'err');
-      showError('展品介绍链接有误\n' + qrError);
+    currentQr = c.qr;
+    el.qrHint.classList.toggle('err', !!c.qrError);
+    if (c.qrError) {
+      el.qrHint.textContent = c.qrError;
+      setStatus(c.qrError, 'err');
+      showError('展品介绍链接有误\n' + c.qrError);
       el.printBtn.disabled = true;
       fitScale();
       updateSheets(false);
       return;
     }
     el.qrHint.textContent = currentQr
-      ? '已生成二维码：' + qrParsed.bytes + ' / ' + QR_MAX_BYTES +
+      ? '已生成二维码：' + c.qrParsed.bytes + ' / ' + QR_MAX_BYTES +
         ' 字节（版本 V' + currentQr.version + '，浏览器本地生成）'
       : '未填写链接，不生成二维码';
 
-    // 中文专名保护表：原稿与修订稿应用同一张表；非法时禁用打印、不进行排版
-    var parsedProtect = parseProtectedWords(el.protect.value);
-    el.protectHint.classList.toggle('err', !!parsedProtect.error);
-    if (parsedProtect.error) {
-      el.protectHint.textContent = parsedProtect.error;
-      setStatus(parsedProtect.error, 'err');
-      showError('专名保护表有误\n' + parsedProtect.error);
+    // 中文专名保护表：非法时禁用打印、不进行排版
+    el.protectHint.classList.toggle('err', !!c.protect.error);
+    if (c.protect.error) {
+      el.protectHint.textContent = c.protect.error;
+      setStatus(c.protect.error, 'err');
+      showError('专名保护表有误\n' + c.protect.error);
       el.printBtn.disabled = true;
       fitScale();
       updateSheets(false);
       return;
     }
-    input.protectedWords = parsedProtect.words;
     var dupCount = countNonEmptyLines(el.protect.value) - input.protectedWords.length;
     el.protectHint.textContent = input.protectedWords.length
       ? '已启用 ' + input.protectedWords.length + ' 个保护词' +
@@ -831,8 +875,7 @@
       : '未设置保护词';
 
     // 修订稿非空白即进入对照模式；新填写修订稿时默认以修订稿为成品
-    var revTrim = el.bodyRev.value.trim();
-    var revActive = revTrim.length > 0;
+    var revActive = c.revActive;
     if (revActive && !revWasActive) selectedVersion = 'rev';
     if (!revActive) selectedVersion = 'orig';
     revWasActive = revActive;
@@ -841,7 +884,7 @@
     el.compare.hidden = !revActive;
 
     // 差异对照与尺寸无关，先行渲染（尺寸非法期间对照仍保持更新）
-    if (revActive) renderDiff(input.bodyTrim, revTrim);
+    if (revActive) renderDiff(input.bodyTrim, c.revTrim);
 
     if (!(input.widthMm >= 30 && input.widthMm <= 999 &&
           input.heightMm >= 20 && input.heightMm <= 999)) {
@@ -860,28 +903,13 @@
     }
 
     // 对照模式：原稿与修订稿沿用当前尺寸与英文译文，分别运行现有排版，共用同一保护表
-    var revInput = {
-      title: input.title,
-      body: el.bodyRev.value,
-      bodyEn: input.bodyEn,
-      widthMm: input.widthMm,
-      heightMm: input.heightMm,
-      protectedWords: input.protectedWords,
-      reserveBottomMm: input.reserveBottomMm,
-      paired: input.paired
-    };
-    revInput.titleTrim = input.titleTrim;
-    revInput.bodyTrim = revTrim;
-    revInput.enTrim = input.enTrim;
-    revInput.dual = input.dual;
-
     var resOrig = computeLayout(input);
-    var resRev = computeLayout(revInput);
+    var resRev = computeLayout(c.revInput);
     renderFit(resOrig, resRev);
 
     if (selectedVersion === 'rev') {
-      if (!resRev.ok) showFailure(revInput, resRev, '修订稿');
-      else showSuccess(revInput, resRev, '修订稿');
+      if (!resRev.ok) showFailure(c.revInput, resRev, '修订稿');
+      else showSuccess(c.revInput, resRev, '修订稿');
     } else {
       if (!resOrig.ok) showFailure(input, resOrig, '原稿');
       else showSuccess(input, resOrig, '原稿');
@@ -893,6 +921,233 @@
     return String(raw == null ? '' : raw)
       .split(/\r\n?|\n/)
       .filter(function (ln) { return ln !== ''; }).length;
+  }
+
+  // ---------- 库存规格选型 ----------
+  // 解析库存规格表：每行「宽×高」（毫米；分隔符 ×/x/X/* 均可，数字两侧可含空白）。
+  // 空行忽略；重复规格（宽与高均相同）去重，保留首次出现的顺序；
+  // 非法行记录行号与原因，不参与推荐；去重后超过 12 种时给出错误（不选型）。
+  // 返回 { sizes: [{w, h, order}], errors: [string], dups: number, error: string|null }
+  function parseStockSizes(raw) {
+    var lines = String(raw == null ? '' : raw).split(/\r\n?|\n/);
+    var sizes = [];
+    var errors = [];
+    var dups = 0;
+    var seen = Object.create(null);
+    for (var i = 0; i < lines.length; i++) {
+      var text = lines[i].trim();
+      if (text === '') continue; // 空行忽略
+      var m = text.match(/^(\d+(?:\.\d+)?)\s*[×xX*]\s*(\d+(?:\.\d+)?)$/);
+      if (!m) {
+        errors.push('第 ' + (i + 1) + ' 行「' + text +
+          '」无法识别：请按「宽×高」填写（毫米），如 120×80。');
+        continue;
+      }
+      var w = parseFloat(m[1]);
+      var h = parseFloat(m[2]);
+      if (!(w >= 30 && w <= 999)) {
+        errors.push('第 ' + (i + 1) + ' 行宽 ' + m[1] +
+          'mm 超出范围（宽需 30～999mm），该行不参与推荐。');
+        continue;
+      }
+      if (!(h >= 20 && h <= 999)) {
+        errors.push('第 ' + (i + 1) + ' 行高 ' + m[2] +
+          'mm 超出范围（高需 20～999mm），该行不参与推荐。');
+        continue;
+      }
+      var key = w + '×' + h;
+      if (seen[key]) { dups++; continue; } // 重复规格去重
+      seen[key] = true;
+      sizes.push({ w: w, h: h, order: sizes.length });
+    }
+    var error = null;
+    if (sizes.length > STOCK_MAX) {
+      error = '库存规格去重后有 ' + sizes.length + ' 种，超过上限 ' + STOCK_MAX +
+        ' 种，请删减后再选型。';
+    }
+    return { sizes: sizes, errors: errors, dups: dups, error: error };
+  }
+
+  // 库存规格表提示：录入种数、重复与非法行（指出行号）；仅更新提示，不参与排版
+  function updateStockHint() {
+    var parsed = parseStockSizes(el.stockSizes.value);
+    var parts = [];
+    if (parsed.sizes.length) {
+      parts.push('已录入 ' + parsed.sizes.length + ' 种规格' +
+        (parsed.dups ? '（已自动忽略 ' + parsed.dups + ' 个重复规格）' : ''));
+    } else {
+      parts.push('未录入库存规格');
+    }
+    if (parsed.errors.length) parts.push(parsed.errors.join(' '));
+    if (parsed.error) parts.push(parsed.error);
+    el.stockHint.textContent = parts.join(' ');
+    el.stockHint.classList.toggle('err', parsed.errors.length > 0 || !!parsed.error);
+  }
+
+  // 选型结果中单个规格的失败原因（沿用对照表 fitNote 的口径；
+  // 尺寸配置失败换为简短说明，完整原因可在手动填入该尺寸后于预览区查看）
+  function stockFailNote(r, qrReserved) {
+    if (r.reason === 'config') {
+      return '✗ 尺寸过小：扣除 8mm 内边距' +
+        (qrReserved ? '与底部 ' + QR_BAND_MM + 'mm 二维码区' : '') +
+        '后无足够排版空间';
+    }
+    return fitNote(r).text;
+  }
+
+  function showStockError(message) {
+    el.stockResult.innerHTML = '';
+    var div = document.createElement('div');
+    div.className = 'stock-result-none';
+    div.textContent = message;
+    el.stockResult.appendChild(div);
+    el.stockResult.hidden = false;
+  }
+
+  // 点击「选型」：以当前选定的成品版本（原稿/修订稿）与当前中英、段落对齐、
+  // 专名保护、二维码设置，对每种库存规格调用现有排版规则求最大可用字号。
+  function runStockPick() {
+    var parsed = parseStockSizes(el.stockSizes.value);
+    updateStockHint();
+
+    if (parsed.error) { showStockError(parsed.error); return; }
+    if (!parsed.sizes.length) {
+      showStockError('没有可参与推荐的库存规格：请逐行录入现有展签的「宽×高」（毫米）。' +
+        (parsed.errors.length ? '\n' + parsed.errors.join('\n') : ''));
+      return;
+    }
+
+    // 当前设置存在阻塞性错误（链接/保护表）时不选型
+    var c = collectInputs();
+    if (c.qrError) {
+      showStockError('展品介绍链接有误，无法选型：\n' + c.qrError);
+      return;
+    }
+    if (c.protect.error) {
+      showStockError('专名保护表有误，无法选型：\n' + c.protect.error);
+      return;
+    }
+
+    var useRev = c.revActive && selectedVersion === 'rev';
+    var base = useRev ? c.revInput : c.input;
+
+    var rows = parsed.sizes.map(function (s) {
+      var trial = Object.assign({}, base, { widthMm: s.w, heightMm: s.h });
+      return {
+        w: s.w, h: s.h, order: s.order, area: s.w * s.h,
+        result: computeLayout(trial)
+      };
+    });
+    // 面积从小到大，同面积按录入顺序
+    var byArea = function (a, b) { return a.area - b.area || a.order - b.order; };
+    var fitting = rows.filter(function (r) { return r.result.ok; }).sort(byArea);
+    var failing = rows.filter(function (r) { return !r.result.ok; }).sort(byArea);
+
+    renderStockResult(c, useRev, fitting, failing, parsed.errors);
+  }
+
+  // 选型结果：能完整容纳的规格按面积从小到大（同面积按录入顺序）列在前，
+  // 其余规格列在后并注明失败原因；每个可容纳规格提供「采用」按钮。
+  function renderStockResult(c, useRev, fitting, failing, lineErrors) {
+    el.stockResult.innerHTML = '';
+    el.stockResult.hidden = false;
+
+    var basis = '成品＝' + (useRev ? '修订稿' : '原稿') +
+      ' · ' + (c.input.dual ? '中英双栏' : '单栏') +
+      (c.input.paired ? ' · 段落对齐' : '') +
+      (c.input.protectedWords && c.input.protectedWords.length
+        ? ' · 保护词 ' + c.input.protectedWords.length + ' 个' : '') +
+      (c.qr ? ' · 预留 ' + QR_BAND_MM + 'mm 二维码区' : ' · 无二维码');
+    var head = document.createElement('div');
+    head.className = 'stock-result-head';
+    head.textContent = '选型依据：' + basis + '。修改文案或设置后请重新点击「选型」。';
+    el.stockResult.appendChild(head);
+
+    if (lineErrors.length) {
+      var errs = document.createElement('div');
+      errs.className = 'stock-result-errs';
+      errs.textContent = '以下行无效，未参与推荐：\n' + lineErrors.join('\n');
+      el.stockResult.appendChild(errs);
+    }
+
+    if (!fitting.length) {
+      var none = document.createElement('div');
+      none.className = 'stock-result-none';
+      none.textContent = '没有能完整容纳当前成品的库存规格；当前尺寸保持不变，未做改动。';
+      el.stockResult.appendChild(none);
+    }
+
+    var table = document.createElement('table');
+    table.className = 'stock-table';
+    var thead = document.createElement('thead');
+    var headRow = document.createElement('tr');
+    ['规格（宽×高，mm）', fitting.length ? '可用字号 / 失败原因' : '失败原因', '操作']
+      .forEach(function (txt) {
+        var th = document.createElement('th');
+        th.textContent = txt;
+        headRow.appendChild(th);
+      });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    var tbody = document.createElement('tbody');
+
+    fitting.forEach(function (row, idx) {
+      var tr = document.createElement('tr');
+      var sizeTd = document.createElement('td');
+      sizeTd.textContent = row.w + ' × ' + row.h;
+      if (idx === 0) {
+        var best = document.createElement('span');
+        best.className = 'stock-best';
+        best.textContent = '推荐';
+        sizeTd.appendChild(best);
+      }
+      var resTd = document.createElement('td');
+      resTd.className = 'good';
+      resTd.textContent = '✓ 可用 ' + row.result.bodyPx + 'px';
+      var actTd = document.createElement('td');
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'stock-adopt';
+      btn.textContent = '采用';
+      btn.addEventListener('click', function () { adoptStockSize(row.w, row.h); });
+      actTd.appendChild(btn);
+      tr.appendChild(sizeTd);
+      tr.appendChild(resTd);
+      tr.appendChild(actTd);
+      tbody.appendChild(tr);
+    });
+
+    failing.forEach(function (row) {
+      var tr = document.createElement('tr');
+      var sizeTd = document.createElement('td');
+      sizeTd.textContent = row.w + ' × ' + row.h;
+      var resTd = document.createElement('td');
+      resTd.className = 'bad';
+      resTd.textContent = stockFailNote(row.result, !!c.qr);
+      var actTd = document.createElement('td');
+      actTd.textContent = '—';
+      tr.appendChild(sizeTd);
+      tr.appendChild(resTd);
+      tr.appendChild(actTd);
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    el.stockResult.appendChild(table);
+
+    if (fitting.length) {
+      var tip = document.createElement('div');
+      tip.className = 'stock-result-head';
+      tip.textContent = '点击「采用」才把该规格回填到宽/高并刷新预览、单张与拼版打印；未采用前当前尺寸不变。';
+      el.stockResult.appendChild(tip);
+    }
+  }
+
+  // 采用推荐规格：回填宽/高并重排，刷新原有预览、单张及拼版打印
+  function adoptStockSize(w, h) {
+    el.widthMm.value = w;
+    el.heightMm.value = h;
+    render();
   }
 
   function showError(message) {
@@ -1164,7 +1419,17 @@
     });
   });
 
+  // 库存规格表：输入时仅更新提示并清空上次选型结果，不参与排版
+  el.stockSizes.addEventListener('input', function () {
+    el.stockResult.hidden = true;
+    updateStockHint();
+  });
+  el.stockSizes.addEventListener('change', updateStockHint);
+  // 选型：以当前成品版本与设置，对各库存规格求最大可用字号并给出推荐
+  el.stockPickBtn.addEventListener('click', runStockPick);
+
   updateRevCount(false);
+  updateStockHint();
 
   el.printBtn.addEventListener('click', function () {
     printMode = 'single';
